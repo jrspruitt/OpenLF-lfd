@@ -33,7 +33,6 @@
 #else
 #define daemonize(a)
 #endif
-
 static int backlight = 0;
 static int running = 0;
 static int mv = 0;
@@ -156,12 +155,6 @@ void handle_control_socket(int s)
 void handle_key(unsigned int code)
 {
 	switch (code) {
-	       case KEY_VOLUMEUP:
-		       sound_volume_up();
-		       break;
-	       case KEY_VOLUMEDOWN:
-		       sound_volume_down();
-		       break;
 	       case KEY_X:
 		       if (backlight)
 			       backlight_next();
@@ -189,15 +182,16 @@ void handle_signal(int sig)
 
 enum {
 	LFD_KEY_PRESS		= 0,
-	LFD_CONTROL_SOCKET	= 1,
+	LFD_VOLUME			= 1,
+	LFD_CONTROL_SOCKET	= 2,
 };
 
 int main(int argc, char **argv)
 {
 	int ret, size;
-	int fd = -1, ls;
+	int fd = -1, fdv = -1, ls;
 	struct input_event ev;
-	struct pollfd fds[2];
+	struct pollfd fds[3];
 	int num_fds = 0;
 	struct sigaction sa_int;
 
@@ -213,12 +207,14 @@ int main(int argc, char **argv)
 		exit(1);
 #endif
 
+
 	if (sound_connect())
 		goto fail_sound;
 
 	running = 0;
 	if (backlight_connect() == 0)
 		backlight = 1;
+
 
 	fd = open_input_device("LF1000 Keyboard");
 	if (fd < 0) {
@@ -227,6 +223,16 @@ int main(int argc, char **argv)
 	}
 	fds[LFD_KEY_PRESS].fd = fd;
 	fds[LFD_KEY_PRESS].events = POLLIN;
+	num_fds++;
+
+	/* volume fd open */
+	fdv = open_input_device("OpenLF Didj volume interface");
+	if (fdv < 0) {
+		dbprintf("can't open volume input device\n");
+		goto fail_kb;
+	}
+	fds[LFD_VOLUME].fd = fdv;
+	fds[LFD_VOLUME].events = POLLIN;
 	num_fds++;
 
 	ls = create_listening_socket(LFD_SOCKET_PATH);
@@ -273,6 +279,11 @@ int main(int argc, char **argv)
 				if (ev.type == EV_KEY && ev.value == 1)
 					handle_key(ev.code);
 			}
+			if(fds[LFD_VOLUME].revents & POLLIN) {
+				size = read(fdv, &ev, sizeof(ev));
+				if (ev.type == EV_ABS)
+					handle_volume(ev.value);
+			}
 			if (fds[LFD_CONTROL_SOCKET].revents & POLLIN)
 				handle_control_socket(ls);
 		}
@@ -293,6 +304,7 @@ fail_sig:
 fail_sock:
 fail_sound:
 	close(fd);
+	close(fdv);
 fail_kb:
 	sound_disconnect();
 #ifdef DEBUG_PRINT

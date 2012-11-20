@@ -83,7 +83,7 @@ static void print_usage(char *name)
 {
 	printf("usage: %s <get|set> <item> [val]\n", name);
 	printf("\t\t  get volume\n");
-	printf("\t\t  set volume [0-8]\n");
+	printf("\t\t  set volume [0-128]\n");
 	printf("\t\t  get backlight\n");
 	printf("\t\t  set backlight [0-3]\n");
 	printf("\t\t  set backlight-next\n");

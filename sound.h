@@ -16,5 +16,5 @@ int sound_volume_up(void);
 int sound_volume_down(void);
 int sound_get_volume(void);
 void sound_set_volume(int level);
-
+void handle_volume(int adc_reading);
 #endif /* __SOUND_H__ */

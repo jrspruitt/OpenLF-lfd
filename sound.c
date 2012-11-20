@@ -25,12 +25,31 @@
 #include <string.h>
 
 #include "debug.h"
+#include "volumeTable.h"
 
 #define CARD_NAME	"default"
 
-#define VOL_STEPS	8
+
 #define VOL_DEFAULT	(VOL_STEPS/2 + 1)
 
+int volume_init(void){
+	int fdi = -1;
+	char buff[4];
+
+	fdi = open("/sys/devices/platform/openlf-didj-volume/adc_reading", O_RDONLY);
+
+	if (fdi != -1){
+		read(fdi, buff, sizeof(buff));
+		dbprintf("Initial ADC: %d\n", atoi(buff));
+		close(fdi);
+		return atoi(buff);
+	}
+	else
+	{
+		return VOL_DEFAULT;
+	}
+
+}
 struct playback_dev {
 	snd_mixer_elem_t *elem;
 	long pmin, pmax, pvol_left, pvol_right;
@@ -42,38 +61,22 @@ struct playback_dev {
 enum board_type {
 	UNKNOWN = 0,
 	CS43L22 = 1,
-	LFP100  = 2,
 	};
 	
 enum board_type	board;
 
 static snd_mixer_t *handle = NULL;
 
-static uint8_t lfp100_master_vol[VOL_STEPS] =
-	{1, 5, 9, 13, 17, 21, 26, 31};
-
-static uint8_t cs43l22_hp_vol[VOL_STEPS] =
-	{143, 157, 170, 182, 193, 204, 213, 222};
-static uint8_t cs43l22_sp_vol[VOL_STEPS] =
-	{210, 218, 225, 231, 236, 242, 247, 251};
-
 struct playback_dev cs43l22_sp = {
 	.name		= "Speaker",
-	.vol		= cs43l22_sp_vol,
+	.vol		= speakerVolume,
 	.level_left	= VOL_DEFAULT,
 	.level_right	= VOL_DEFAULT,
 };
 
 struct playback_dev cs43l22_hp = {
 	.name		= "Headphone",
-	.vol		= cs43l22_hp_vol,
-	.level_left	= VOL_DEFAULT,
-	.level_right	= VOL_DEFAULT,
-};
-
-struct playback_dev lfp100_master = {
-	.name		= "Master",
-	.vol		= lfp100_master_vol,
+	.vol		= headphoneVolume,
 	.level_left	= VOL_DEFAULT,
 	.level_right	= VOL_DEFAULT,
 };
@@ -235,12 +238,25 @@ static int get_playback_level(struct playback_dev *dev, uint8_t *level)
 	return 0;
 }
 
+int handle_volume(int adc_reading)
+{
+		int ret;
+		int adj_vol = (adc_reading >> 3) & 0x7F;
+
+		ret = set_playback_level(&cs43l22_sp, adj_vol);
+		if (ret)
+			return ret;
+
+		return set_playback_level(&cs43l22_hp, adj_vol);	
+}
+
 /* API functions */
 
 int sound_connect(void)
 {
 	int err = 0;
 	char *name = 0;
+	int adc_reading;	
 
 	err = snd_mixer_open(&handle, 0);
 	if (err < 0) {
@@ -263,9 +279,7 @@ int sound_connect(void)
 		dbprintf("Card name is %s\n", name);
 	}
 
-	if (strcasestr(name, "LFP100")) { /* LFP100 codec */
-		board = LFP100;
-	} else if (strcasestr(name, "43l22")) { /* cirrus logic 43l22 */
+	if (strcasestr(name, "43l22")) { /* cirrus logic 43l22 */
 		board = CS43L22;
 	} else {	/* unrecognized chip, default to cs43l22 */
 		dbprintf("Volume not set for card: %s\n", name);
@@ -283,21 +297,11 @@ int sound_connect(void)
 		dbprintf("Mixer load error: %s\n", snd_strerror(err));
 		goto out_connect;
 	}
+	get_playback_info(handle, &cs43l22_hp);
+	get_playback_info(handle, &cs43l22_sp);
+	adc_reading = volume_init();
+	handle_volume(adc_reading);
 
-	switch(board) {
-	case LFP100:
-		get_playback_info(handle, &lfp100_master);
-		set_playback_level(&lfp100_master, VOL_DEFAULT);
-		break;
-	case CS43L22:
-	default:
-		get_playback_info(handle, &cs43l22_hp);
-		set_playback_level(&cs43l22_hp, VOL_DEFAULT);
-
-		get_playback_info(handle, &cs43l22_sp);
-		set_playback_level(&cs43l22_sp, VOL_DEFAULT);
-		break;
-	}
 	return 0;
 
 out_connect:
@@ -316,106 +320,12 @@ void sound_disconnect(void)
 	handle = NULL;
 }
 
-int sound_volume_up(void)
-{
-	uint8_t level;
-	int ret;
-
-	dbprintf("%s\n", __FUNCTION__);
-
-	if (!handle) {
-		dbprintf("no handle\n");
-		return 1;
-	}
-
-	switch(board) {
-	case LFP100:
-		ret = get_playback_level(&lfp100_master, &level);
-		if (ret)
-			return ret;
-
-		return set_playback_level(&lfp100_master, level + 1);
-		break;
-	case CS43L22:
-	default:
-		ret = get_playback_level(&cs43l22_sp, &level);
-		if (ret)
-			return ret;
-
-		ret = set_playback_level(&cs43l22_sp, level + 1);
-		if (ret)
-			return ret;
-
-		ret = get_playback_level(&cs43l22_hp, &level);
-		if (ret)
-			return ret;
-
-		return set_playback_level(&cs43l22_hp, level + 1);
-		break;
-	}
-}
-
-int sound_volume_down(void)
-{
-	uint8_t level;
-	int ret;
-
-	dbprintf("%s\n", __FUNCTION__);
-
-	if (!handle) {
-		dbprintf("no handle\n");
-		return 1;
-	}
-
-	switch(board) {
-	case LFP100:
-		ret = get_playback_level(&lfp100_master, &level);
-		if (ret)
-			return ret;
-
-		if (level > 0) {
-			ret = set_playback_level(&lfp100_master, level - 1);
-			if (ret)
-				return ret;
-		}
-		break;
-	case CS43L22:
-	default:
-		ret = get_playback_level(&cs43l22_sp, &level);
-		if (ret)
-			return ret;
-
-		if (level > 0) {
-			ret = set_playback_level(&cs43l22_sp, level - 1);
-			if (ret)
-				return ret;
-		}
-
-		ret = get_playback_level(&cs43l22_hp, &level);
-		if (ret)
-			return ret;
-
-		if (level > 0)
-			return set_playback_level(&cs43l22_hp, level - 1);
-		break;
-	}	
-	return 0;
-}
-
 int sound_get_volume(void)
 {
 	uint8_t lsp = 0, lhp = 0;
 
-	switch(board) {
-	case LFP100:
-		get_playback_level(&lfp100_master, &lsp);
-		lhp = lsp;
-		break;
-	case CS43L22:
-	default:
-		get_playback_level(&cs43l22_sp, &lsp);
-		get_playback_level(&cs43l22_hp, &lhp);
-	}
+	get_playback_level(&cs43l22_sp, &lsp);
+	get_playback_level(&cs43l22_hp, &lhp);
 
 	if (lsp > lhp)
 		return lhp;
@@ -424,14 +334,7 @@ int sound_get_volume(void)
 
 void sound_set_volume(int level)
 {
-	switch(board) {
-	case LFP100:
-		set_playback_level(&lfp100_master, level);
-		break;
-	case CS43L22:
-	default:
-		set_playback_level(&cs43l22_sp, level);
-		set_playback_level(&cs43l22_hp, level);
-		break;
-	}
+	set_playback_level(&cs43l22_sp, level);
+	set_playback_level(&cs43l22_hp, level);
+
 }

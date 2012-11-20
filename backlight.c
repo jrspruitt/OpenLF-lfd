@@ -17,7 +17,6 @@
 #include <sys/stat.h>
 
 #include "debug.h"
-#include "nor.h"
 #include "i2c.h"
 
 /* We support three backlight interfaces:
@@ -64,7 +63,6 @@ static struct bl_priv priv = {
 #define BL_RANGE_LOW		0
 #define BL_RANGE_HIGH		511
 
-#define LFP100_ADDR	0xCC
 
 /*
  * match existing Explorer backlight levels
@@ -82,19 +80,6 @@ static int backlight[4] = { PHYSICAL_MIN_BACKLIGHT, 234, 318, 400 };
 #define BL_RANGE_HIGH	511
 #define BL_LOGICAL_LOW	0
 #define BL_LOGICAL_HIGH	( sizeof(backlight) / sizeof(int) - 1 )
-
-/*
- * convert virtual byte range [-128,127] to physical [0,511] value
- */
-static int virtual_to_physical(int value)
-{
-	if (value < -128)
-		value = -128;
-	else if (value > 127)
-		value = 127;
-
-	return(value * 2 + 256);
-}
 
 static int value_to_level(int value)
 {
@@ -163,20 +148,6 @@ static int standard_backlight_init(void)
 
 	closedir(dir);
 	return 0;
-}
-
-static int lfp100_detected(void)
-{
-	uint8_t val;
-	
-	if (i2c_read(0, LFP100_ADDR, 0x00, &val, 1) < 0)
-		return 0;
-
-	if ((val & 0xF0) != 0x00)
-		return 0;
-
-	dbprintf("found LFP100r%d\n", val & 0xF);
-	return 1;
 }
 
 static FILE *bl_fopen_standard_brightness(void)
@@ -248,7 +219,6 @@ static int bl_get_standard(void)
 static void bl_next_standard(void)
 {
 	FILE *f;
-	unsigned int val;
 	int next_logical;
 
 	f = bl_fopen_standard_brightness();
@@ -358,7 +328,6 @@ static void bl_next_nonstandard_i2c(void)
 int backlight_connect(void)
 {
 	struct stat st;
-	int virtual_calibration;
 
 	dbprintf("%s\n", __FUNCTION__);
 
@@ -371,10 +340,7 @@ int backlight_connect(void)
 				priv.info.std.max);
 		priv.type = BL_STANDARD;
 	} else if (!stat(BL_NONSTD_DRIVER, &st)) {
-		if (lfp100_detected()) {
-			dbprintf("found non-standard LFP100 backlight\n");
-			priv.type = BL_NON_STANDARD_I2C;
-		} else if (!stat(BL_NONSTD_DRIVER BL_LOGICAL, &st)) {
+		if (!stat(BL_NONSTD_DRIVER BL_LOGICAL, &st)) {
 			dbprintf("found non-standard PWM backlight\n");
 			priv.type = BL_NON_STANDARD_PWM;
 		}
@@ -385,25 +351,6 @@ int backlight_connect(void)
 		return -ENODEV;
 	}
 
-	/* read virtual minimum backlight */
-	if (!nor_open()) {
-		if (nor_get_field(NOR_FIELD_BACKLIGHT, &virtual_calibration,
-					sizeof(virtual_calibration))) {
-			dbprintf("error: can't read backlight calibration\n");
-		} else {
-			//Minh Saelock, reverting this back to a strict offset, and ignoring values less then 0.
-			//This is to match behavior of old dpc driver.
-			//priv.blcal = virtual_to_physical(virtual_calibration) -
-			//	PHYSICAL_MIN_BACKLIGHT;
-			if(virtual_calibration > 0) {
-				priv.blcal = virtual_calibration;
-				dbprintf("backlight physical offset %d\n",
-						priv.blcal);
-			}
-		}
-	} else {
-		dbprintf("error: no NOR Flash access for BL calibration\n");
-	}
 	//Initialize brightness to 2 bars.
 	backlight_set(2);
 	priv.info.std.current = 2;

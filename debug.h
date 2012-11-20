@@ -10,6 +10,7 @@
 #ifndef __DEBUG_H__
 #define __DEBUG_H__
 
+
 #ifdef DEBUG_PRINT
 #include <stdio.h>
 #define dbprintf(...)   fprintf(console, "lfd: " __VA_ARGS__)
